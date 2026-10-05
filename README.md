@@ -9,7 +9,7 @@ This project showcases a secure, modular, and scalable AWS cloud infrastructure 
 The following diagram illustrates the network topology and component relationships deployed in the **AWS Frankfurt (`eu-central-1`)** region:
 
 <p align="center">
-  <img src="architecture-diagram.png" alt="AWS Infrastructure Architecture Diagram" width="850">
+  <img src="topology.png" alt="AWS Infrastructure Architecture Diagram" width="850">
 </p>
 
 ---
