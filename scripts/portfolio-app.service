@@ -1,0 +1,20 @@
+
+[Unit]
+Description=Portfolio Flask Application
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=5
+
+ExecStartPre=-/usr/bin/docker rm -f portfolio-app
+ExecStart=/usr/bin/docker run --name portfolio-app --pull=never --publish 0.0.0.0:5000:5000 --env-file /etc/portfolio-app/portfolio.env --log-driver=journald portfolio-app:latest
+
+ExecStop=/usr/bin/docker stop portfolio-app
+ExecStopPost=-/usr/bin/docker rm portfolio-app
+
+[Install]
+WantedBy=multi-user.target

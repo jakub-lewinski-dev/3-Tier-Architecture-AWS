@@ -1,0 +1,20 @@
+
+CREATE USER portfolio_app;
+GRANT rds_iam TO portfolio_app;
+
+GRANT CONNECT ON DATABASE portfolio TO portfolio_app;
+
+\connect portfolio
+
+GRANT USAGE ON SCHEMA public TO portfolio_app;
+GRANT SELECT, INSERT, UPDATE, DELETE
+ON ALL TABLES IN SCHEMA public TO portfolio_app;
+
+GRANT USAGE, SELECT, UPDATE
+ON ALL SEQUENCES IN SCHEMA public TO portfolio_app;
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO portfolio_app;
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO portfolio_app;

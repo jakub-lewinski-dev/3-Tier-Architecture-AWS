@@ -32,3 +32,8 @@ crash.*.log
 # Local OS/editor files
 .DS_Store
 Thumbs.db
+
+# Terraform plan files
+tfplan
+*.tfplan
+*.plan
