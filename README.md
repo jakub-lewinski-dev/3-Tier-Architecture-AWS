@@ -1,255 +1,225 @@
 # AWS 3-Tier Web Application Infrastructure
 
-A cloud infrastructure project built with **Terraform, AWS, Docker, Packer and Python**. The project demonstrates how to deploy a containerized Flask application on AWS using a three-tier architecture with a private EC2 instance and a private PostgreSQL database.
+Projekt infrastruktury chmurowej zbudowany z wykorzystaniem **Terraform**, **AWS**, **Docker**, **Packer** oraz **Python**. Demonstruje wdrożenie skonteneryzowanej aplikacji Flask na AWS w architekturze trójwarstwowej z prywatną instancją EC2 oraz prywatną bazą danych PostgreSQL.
 
-The infrastructure is designed with a focus on network isolation, IAM-based authentication, least-privilege access and cost optimization.
+Infrastruktura została zaprojektowana z naciskiem na izolację sieciową, uwierzytelnianie oparte na IAM, zasadę najmniejszych uprawnień (*least-privilege*) oraz optymalizację kosztów.
 
-## Architecture
+---
 
-![AWS Architecture](docs/architecture.png)
+## Architektura
 
-### Architecture Overview
+### Przegląd warstw
 
-The infrastructure consists of three main layers:
+| Warstwa | Usługa AWS | Opis |
+| :--- | :--- | :--- |
+| **Prezentacja** (*Presentation*) | Application Load Balancer | Publiczny punkt wejścia dla przychodzącego ruchu HTTP |
+| **Aplikacja** (*Application*) | EC2 + Docker | Prywatna instancja EC2 uruchamiająca skonteneryzowaną aplikację Flask |
+| **Baza danych** (*Database*) | Amazon RDS PostgreSQL | Prywatna baza danych PostgreSQL z uwierzytelnianiem IAM |
 
-| Layer | AWS Service | Description |
-|---|---|---|
-| Presentation | Application Load Balancer | Public entry point for incoming HTTP traffic |
-| Application | EC2 + Docker | Private EC2 instance running a containerized Flask application |
-| Database | Amazon RDS PostgreSQL | Private PostgreSQL database with IAM authentication |
+### Przepływ żądań (*Request Flow*)
+1. Użytkownik wysyła żądanie HTTP do **Application Load Balancer**.
+2. ALB przekazuje ruch do instancji **EC2** umieszczonej w podsieci prywatnej.
+3. Aplikacja **Flask** przetwarza żądanie wewnątrz kontenera **Docker**.
+4. Gdy wymagany jest dostęp do bazy, aplikacja łączy się z **Amazon RDS PostgreSQL** przy użyciu **IAM Database Authentication**.
+5. Odpowiedź wraca przez ALB do użytkownika.
 
-### Request Flow
+---
 
-1. A user sends an HTTP request to the Application Load Balancer.
-2. The ALB forwards the request to the EC2 instance in a private subnet.
-3. The Flask application processes the request inside a Docker container.
-4. When database access is required, the application connects to Amazon RDS PostgreSQL using IAM Database Authentication.
-5. The response is returned through the ALB to the user.
+## Infrastruktura
 
-## Infrastructure
+### Sieć (*Networking*)
+Infrastruktura wdrażana jest w regionie AWS Frankfurt (`eu-central-1`):
+* Własna sieć VPC z pulą adresową `10.0.0.0/16`.
+* Dwie podsieci publiczne w dwóch strefach dostępności (*Availability Zones*).
+* Dwie prywatne podsieci aplikacyjne.
+* Dwie prywatne podsieci bazodanowe.
+* *Internet Gateway* zapewniający łączność podsieciom publicznym.
+* Osobne tablice routingu (*route tables*) dla podsieci publicznych, aplikacyjnych oraz bazodanowych.
+* Brak *NAT Gateway*.
+* Trzy *VPC interface endpoints* zapewniające połączenie z *Systems Manager* bez użycia *NAT Gateway*:
+  * `ssm`
+  * `ssmmessages`
+  * `ec2messages`
+  * Endpointy są wdrażane w pierwszej podsieci aplikacyjnej.
 
-### Networking
+![VPC, podsieci, Internet Gateway i routing](docs/screenshots/02-vpc-network.png)
 
-The infrastructure is deployed in the AWS Frankfurt region (`eu-central-1`).
+### Warstwa aplikacji (*Application Layer*)
+Aplikacja działa na instancji **EC2 `t3.micro`** w podsieci prywatnej.
 
-- Custom VPC with CIDR `10.0.0.0/16`.
-- Two public subnets across two Availability Zones.
-- Two private application subnets.
-- Two private database subnets.
-- Internet Gateway for public subnet connectivity.
-- Separate route tables for public, application and database subnets.
-- No NAT Gateway.
+**Stos technologiczny:**
+* Ubuntu 22.04
+* Docker
+* Python 3.12
+* Flask
+* Gunicorn
+* Psycopg 3
 
-Three VPC interface endpoints provide Systems Manager connectivity without requiring a NAT Gateway:
+Obraz Docker jest budowany na bazie niestandardowego obrazu AMI utworzonego przez **HashiCorp Packer**. Usługa `systemd` automatycznie uruchamia kontener aplikacji po starcie instancji EC2.
 
-- `ssm`
-- `ssmmessages`
-- `ec2messages`
+![Własny AMI utworzony przez Packer, status Available](docs/screenshots/01-packer-ami.png)
 
-The endpoints are deployed in the first application subnet.
+![EC2, typ instancji, prywatny adres IP, brak publicznego IP](docs/screenshots/03-private-ec2.png)
 
-### Application Layer
+![Application Load Balancer, listener HTTP 80 i Healthy target](docs/screenshots/04-application-load-balancer.png)
 
-The application runs on an EC2 `t3.micro` instance in a private subnet.
+### Warstwa bazy danych (*Database Layer*)
+Baza danych działa na **Amazon RDS PostgreSQL**.
 
-Technologies:
+**Konfiguracja:**
+* PostgreSQL
+* `db.t3.micro`
+* 20 GB pamięci `gp3`
+* Włączone szyfrowanie dysku (*storage encryption*)
+* Prywatne podsieci bazodanowe
+* Wyłączony dostęp publiczny (*Publicly accessible: No*)
+* Włączone *IAM Database Authentication*
 
-- Ubuntu 22.04
-- Docker
-- Python 3.12
-- Flask
-- Gunicorn
-- Psycopg 3
+Aplikacja łączy się z PostgreSQL za pomocą tymczasowych tokenów uwierzytelniających IAM generowanych przez AWS SDK dla Pythona (`boto3`). Poświadczenia główne (*master credentials*) RDS są zarządzane przez **AWS Secrets Manager**.
 
-The Docker image is built using a custom AMI created with HashiCorp Packer.
+![RDS PostgreSQL, status Available, Publicly accessible: No](docs/screenshots/05-rds-postgresql.png)
 
-A systemd service automatically starts the application container after the EC2 instance boots.
+---
 
-### Database Layer
+## Bezpieczeństwo
 
-The database uses Amazon RDS PostgreSQL.
+W projekcie zastosowano szereg dobrych praktyk bezpieczeństwa AWS:
+* Instancja EC2 wdrożona bez publicznego adresu IP.
+* Baza danych RDS umieszczona w prywatnych podsieciach.
+* *Security groups* skonfigurowane według zasady najmniejszych uprawnień (*least-privilege*).
+* ALB przyjmuje ruch HTTP na porcie `80`.
+* Aplikacja przyjmuje ruch na porcie `5000` wyłącznie z *security group* przypisanej do ALB.
+* PostgreSQL przyjmuje ruch na porcie `5432` wyłącznie z *security group* przypisanej do aplikacji.
+* Administracja EC2 odbywa się poprzez **AWS Systems Manager Session Manager**.
+* Zamiast statycznych kluczy dostępowych na EC2 wykorzystywane są role IAM.
+* Połączenia aplikacja–baza korzystają z *IAM Database Authentication*.
+* Na instancji EC2 wymuszono **IMDSv2**.
 
-Configuration:
+> **Ograniczenie bezpieczeństwa:** *Application Load Balancer* obsługuje wyłącznie ruch HTTP. Certyfikaty TLS/HTTPS oraz własna domena nie zostały skonfigurowane, ponieważ projekt koncentruje się na demonstracji infrastruktury AWS i łączności między warstwami, a nie na udostępnieniu produkcyjnego serwisu publicznego.
 
-- PostgreSQL
-- `db.t3.micro`
-- 20 GB gp3 storage
-- Storage encryption enabled
-- Private database subnets
-- Public accessibility disabled
-- IAM Database Authentication enabled
+![Sesja Session Manager i działający kontener](docs/screenshots/06-ssm-session.png)
 
-The application connects to PostgreSQL using temporary IAM authentication tokens generated through the AWS SDK for Python (`boto3`).
-
-The RDS master credentials are managed by AWS Secrets Manager.
-
-## Security
-
-The project implements several AWS security practices:
-
-- EC2 instance deployed without a public IP address.
-- RDS database deployed in private subnets.
-- Security groups configured with explicit least-privilege access rules.
-- ALB accepts incoming HTTP traffic on port 80.
-- Application accepts traffic on port 5000 only from the ALB security group.
-- PostgreSQL accepts traffic on port 5432 only from the application security group.
-- EC2 administration through AWS Systems Manager Session Manager.
-- IAM roles used instead of long-term AWS credentials on EC2.
-- IAM Database Authentication used for application-to-database connections.
-- IMDSv2 enforced on the EC2 instance.
-
-**Security limitation:** The Application Load Balancer uses HTTP only. HTTPS, TLS certificates and a custom domain were not configured because this project focuses on demonstrating AWS infrastructure and application connectivity rather than providing a production-ready public service.
+---
 
 ## Infrastructure as Code
 
-Terraform is used to provision and manage the AWS infrastructure.
+**Terraform** służy do definiowania, wdrażania oraz usuwania zasobów AWS. Konfiguracja obejmuje:
+* Zasoby VPC i podsieci.
+* *Internet Gateway* oraz tablice routingu.
+* *Security groups* i reguły sieciowe.
+* *VPC interface endpoints*.
+* Instancję EC2 oraz zasoby IAM.
+* *Application Load Balancer* i *target group*.
+* Instancję RDS PostgreSQL.
 
-The configuration defines:
+### Niestandardowy obraz AMI z Packer
+**HashiCorp Packer** buduje niestandardowy obraz AMI zawierający środowisko uruchomieniowe aplikacji i konfigurację Dockera. Dzięki temu instancje EC2 startują z gotowym środowiskiem zamiast pobierać i instalować wszystkie zależności dopiero podczas rozruchu.
 
-- VPC and subnet resources.
-- Internet Gateway and route tables.
-- Security groups and network rules.
-- VPC interface endpoints.
-- EC2 instance and IAM resources.
-- Application Load Balancer and target group.
-- RDS PostgreSQL instance.
+---
 
-The infrastructure can be provisioned and removed using Terraform commands.
+## Endpointy aplikacji
 
-## Custom AMI with Packer
+Aplikacja Flask udostępnia następujące endpointy:
 
-HashiCorp Packer is used to build a custom Amazon Machine Image.
+| Endpoint | Opis |
+| :--- | :--- |
+| `/` | Główna strona aplikacji |
+| `/health` | *Health check* aplikacji |
+| `/db-health` | Weryfikacja połączenia z bazą danych |
 
-The image contains the application environment and Docker configuration required to run the Flask application.
+ALB wykorzystuje `/health` jako endpoint *health check* dla grupy docelowej (*target group*), a `/db-health` potwierdza łączność aplikacji z bazą PostgreSQL.
 
-This approach allows EC2 instances to start with the application environment already prepared instead of requiring all dependencies to be installed during instance startup.
+![Strona główna Flask](docs/screenshots/07-application.png)
 
-## Application Endpoints
+![Odpowiedź endpointu /health](docs/screenshots/08-health-checks.png)
 
-The Flask application exposes the following endpoints:
+![Odpowiedź database connected z /db-health](docs/screenshots/09-database-health.png)
 
-| Endpoint | Description |
-|---|---|
-| `/` | Main application page |
-| `/health` | Application health check |
-| `/db-health` | Database connectivity check |
+---
 
-The ALB uses `/health` as its target group health check endpoint.
+## Optymalizacja kosztów
 
-The `/db-health` endpoint verifies connectivity between the application and PostgreSQL.
+Projekt uwzględnia oszczędność kosztów na etapie projektowania:
+* Brak *NAT Gateway*.
+* Prywatne instancje łączą się z *Systems Manager* przez *VPC endpoints*.
+* Zastosowano małe klasy instancji dla EC2 i RDS.
+* Środowisko jest przeznaczone do celów testowych i demonstracyjnych — po zakończeniu testów można je usunąć poleceniami Terraform.
 
-## Cost Optimization
+> Zasoby AWS takie jak EC2, RDS, ALB, wolumeny EBS, *VPC endpoints* czy *snapshoty* AMI mogą generować opłaty dopóki istnieją. Zawsze upewnij się, że nieużywane zasoby zostały usunięte.
 
-Cost optimization was considered during the infrastructure design.
+---
 
-- No NAT Gateway was deployed.
-- Private instances use VPC endpoints for Systems Manager connectivity.
-- EC2 and RDS use small instance types.
-- Infrastructure is intended to be deployed for testing and demonstration purposes.
-- Terraform can destroy the infrastructure when it is no longer needed.
+## Wdrożenie
 
-AWS resources such as EC2, RDS, ALB, EBS storage, VPC endpoints and AMI snapshots may incur charges while they exist. Always verify that unused resources have been removed.
+### Wymagania wstępne
+* Konto AWS
+* Skonfigurowany AWS CLI z odpowiednimi uprawnieniami
+* Terraform
+* HashiCorp Packer
+* Docker
+* Dostęp do repozytorium projektu
 
-## Deployment
+### 1. Zbuduj obraz AMI aplikacji
+Zbuduj własny obraz AMI za pomocą Packera na podstawie szablonu z repozytorium.
 
-### Prerequisites
-
-- AWS account
-- AWS CLI configured with appropriate permissions
-- Terraform
-- HashiCorp Packer
-- Docker
-- Access to the project repository
-
-### 1. Build the Application AMI
-
-Use Packer to build the custom application AMI from the Packer template included in the repository.
-
-### 2. Initialize Terraform
-
+### 2. Zainicjalizuj Terraform
 ```bash
 terraform init
 ```
 
-### 3. Validate the Configuration
-
+### 3. Zwaliduj konfigurację
 ```bash
 terraform fmt -check -recursive
 terraform validate
 ```
 
-### 4. Review the Deployment Plan
-
+### 4. Przejrzyj plan wdrożenia
 ```bash
 terraform plan
 ```
 
-### 5. Deploy the Infrastructure
-
+### 5. Wdróż infrastrukturę
+Przejrzyj proponowane zmiany przed zatwierdzeniem wdrożenia:
 ```bash
 terraform apply
 ```
 
-Review the proposed changes before confirming deployment.
+### 6. Zainicjalizuj użytkownika aplikacyjnego w bazie danych
+Po uzyskaniu statusu `Available` przez instancję RDS wykonaj skrypt `scripts/init-db.sql` korzystając z połączenia administracyjnego PostgreSQL. Skrypt tworzy użytkownika aplikacyjnego, nadaje rolę `rds_iam` i konfiguruje uprawnienia w bazie danych.
 
-### 6. Initialize the Database Application User
-
-After RDS becomes available, execute `scripts/init-db.sql` using an administrative PostgreSQL connection.
-
-This creates the application database user, grants the `rds_iam` role and configures database permissions.
-
-### 7. Verify the Application
-
-Use the DNS name of the Application Load Balancer to access the application.
-
-Test the following endpoints:
-
+### 7. Zweryfikuj działanie aplikacji
+Użyj nazwy DNS *Application Load Balancer*, aby sprawdzić działanie endpointów:
 ```text
 http://<ALB-DNS>/
 http://<ALB-DNS>/health
 http://<ALB-DNS>/db-health
 ```
 
-### 8. Destroy the Infrastructure
-
-When testing is complete, remove the Terraform-managed resources:
-
+### 8. Usuń infrastrukturę
+Po zakończeniu testów usuń zasoby zarządzane przez Terraform:
 ```bash
 terraform destroy
 ```
+Obraz AMI oraz powiązane *snapshoty* utworzone przez Packer należy usunąć osobno, jeśli nie są już potrzebne.
 
-The custom AMI and its associated snapshots created by Packer must be removed separately if they are no longer needed.
+---
 
-## Project Screenshots
+## Zademonstrowane umiejętności
+* Infrastruktura chmurowa AWS
+* Infrastructure as Code (Terraform)
+* Tworzenie własnych obrazów AMI (Packer)
+* Konteneryzacja (Docker)
+* Wdrażanie aplikacji Python / Flask
+* Sieci AWS VPC i architektura podsieci publicznych/prywatnych
+* Konfiguracja Application Load Balancer
+* Amazon RDS PostgreSQL
+* Role i polityki IAM oraz IAM Database Authentication
+* AWS Systems Manager i AWS Secrets Manager
+* Projektowanie *security groups*
+* Optymalizacja kosztów w chmurze
 
-Screenshots documenting the deployed infrastructure and application are available in:
+---
 
-```text
-docs/screenshots/
-```
-
-They demonstrate the custom AMI, VPC networking, private EC2 instance, load balancer, PostgreSQL database, Systems Manager access and application health checks.
-
-## Skills Demonstrated
-
-- AWS cloud infrastructure
-- Infrastructure as Code with Terraform
-- Custom AMI creation with Packer
-- Docker containerization
-- Python and Flask application deployment
-- AWS VPC networking
-- Public and private subnet architecture
-- Application Load Balancer configuration
-- Amazon RDS PostgreSQL
-- IAM roles and policies
-- IAM Database Authentication
-- AWS Systems Manager
-- AWS Secrets Manager
-- Security group design
-- Cloud cost optimization
-
-## Author
-
-**Jakub Lewiński**
-
-GitHub: [jakub-lewinski-dev](https://github.com/jakub-lewinski-dev)
+## Autor
+**Jakub Lewiński**  
+GitHub: `jakub-lewinski-dev`
